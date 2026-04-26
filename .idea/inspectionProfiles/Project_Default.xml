@@ -1,0 +1,24 @@
+<component name="InspectionProjectProfileManager">
+  <profile version="1.0">
+    <option name="myName" value="Project Default" />
+    <inspection_tool class="PyPackageRequirementsInspection" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="ignoredPackages">
+        <list>
+          <option value="opencv-python-headless" />
+          <option value="paddlepaddle" />
+          <option value="paddleocr" />
+          <option value="jinja2" />
+          <option value="fastapi" />
+          <option value="uvicorn" />
+          <option value="alembic" />
+          <option value="celery" />
+          <option value="redis" />
+          <option value="python-multipart" />
+          <option value="aiofiles" />
+          <option value="pandas" />
+          <option value="flower" />
+        </list>
+      </option>
+    </inspection_tool>
+  </profile>
+</component>

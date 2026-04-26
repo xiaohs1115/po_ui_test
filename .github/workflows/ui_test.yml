@@ -1,0 +1,69 @@
+name: UI Automation Tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'nl_cases/**'
+      - 'pages/**'
+      - 'tests/**'
+      - 'core/**'
+      - 'runner/**'
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 1 * * 1-5'  # 北京时间 09:00，周一至周五
+  workflow_dispatch:        # 支持手动触发
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          playwright install chromium
+          playwright install-deps chromium
+
+      - name: Generate test scripts from NL cases
+        env:
+          CI: true
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: python runner/run_all.py
+
+      - name: Run generated tests
+        env:
+          CI: true
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: |
+          pytest tests/ -v --tb=short \
+            --html=report/report.html --self-contained-html \
+            --junitxml=report/junit.xml
+
+      - name: Publish test report to GitHub
+        if: always()
+        uses: dorny/test-reporter@v1
+        with:
+          name: Pytest Results
+          path: report/junit.xml
+          reporter: java-junit
+          fail-on-error: false
+
+      - name: Upload HTML report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: html-report-${{ github.run_number }}
+          path: report/report.html
+          retention-days: 30
