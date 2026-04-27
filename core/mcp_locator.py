@@ -124,7 +124,11 @@ def locate_elements_batch(url: str, descriptions: list[str]) -> list[tuple[str, 
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()
-    t.join()
+    t.join(timeout=60)
+
+    if t.is_alive():
+        print("  ⚠️  MCP 定位超时（60s），回退到 HTML 模式")
+        return [("", "")] * len(descriptions)
 
     if error[0] is not None:
         print(f"  ⚠️  MCP 定位失败: {error[0]}")
