@@ -45,6 +45,13 @@ jobs:
           playwright install-deps chromium
           npx @playwright/mcp@latest --version
 
+      - name: Restore manifest cache
+        uses: actions/cache@v4
+        with:
+          path: runner/.manifest.json
+          key: manifest-${{ hashFiles('nl_cases/**') }}
+          restore-keys: manifest-
+
       - name: Generate test scripts from NL cases
         env:
           CI: true
