@@ -797,7 +797,7 @@ def generate_test_file(cases: list[TestCase]) -> str:
         lines += [
             "",
             f"def test_{fn}():",
-            f'    """{case.nl_description.strip()}"""',
+            f'    """{case.nl_description.strip()}\n    """',
             "    with sync_playwright() as p:",
             '        browser = p.chromium.launch(headless="CI" in os.environ)',
             f"        po = {cls}(browser.new_page())",
