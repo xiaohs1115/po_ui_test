@@ -382,6 +382,8 @@ def resolve_elements(page: Page, steps: list[TestStep]) -> list[TestStep]:
         mcp_results = locate_elements_batch(current_url, descs)
     except ImportError:
         print("  ℹ️  mcp 未安装，使用 HTML 模式（pip install mcp 可启用 MCP）")
+    except Exception as e:
+        print(f"  ⚠️  MCP 定位异常，回退到 HTML 模式: {e}")
 
     # ── 逐步处理结果 ─────────────────────────────────────────────
     html_cache: dict[str, str] = {}
@@ -1044,11 +1046,15 @@ def run_test_case(test_case: TestCase, save_script: bool = True):
         page = browser.new_page()
 
         # 先打开页面，以便提取 HTML 用于元素定位
-        page.goto(test_case.url, timeout=60000, wait_until="domcontentloaded")
         try:
-            page.wait_for_load_state('networkidle', timeout=10000)
-        except Exception:
-            pass
+            page.goto(test_case.url, timeout=90000, wait_until="domcontentloaded")
+            try:
+                page.wait_for_load_state('networkidle', timeout=10000)
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"  ⚠️  页面加载失败: {e}")
+            print("  → 跳过 Phase 2 定位，直接进入 Phase 3 执行（导航步骤会重试）")
 
         # Phase 2: 定位元素
         print("\n🎯 Phase 2: AI 定位元素...")
