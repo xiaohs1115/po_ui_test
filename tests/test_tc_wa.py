@@ -61,4 +61,4 @@ def test_jump_link():
 
 
 if __name__ == "__main__":
-    test_tc_wa()
+    test_jump_link()

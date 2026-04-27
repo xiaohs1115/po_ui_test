@@ -127,8 +127,12 @@ def run_cases(cases: list[TestCase], cleanup_orphans: bool = False) -> None:
     any_change = False
 
     for script_safe, group in groups.items():
+        # project 子目录（同 script_name 下的 case 必须属于同一 project）
+        project_safe = _safe_name(group[0].project) if group[0].project else ""
+        tests_dir = os.path.join(_TESTS_DIR, project_safe) if project_safe else _TESTS_DIR
+
         page_file = os.path.join(_PAGES_DIR, f"{script_safe}_page.py")
-        test_file = os.path.join(_TESTS_DIR, f"test_{script_safe}.py")
+        test_file = os.path.join(tests_dir, f"test_{script_safe}.py")
         script_manifest = manifest.get(script_safe, {})
 
         # 兼容旧格式（list → 视为全部未知，强制重新生成）
@@ -167,8 +171,8 @@ def run_cases(cases: list[TestCase], cleanup_orphans: bool = False) -> None:
         all_cases = group  # group 已按原始顺序排列，steps 已在上面填充
 
         os.makedirs(_PAGES_DIR, exist_ok=True)
-        os.makedirs(_TESTS_DIR, exist_ok=True)
-        for d in [_PAGES_DIR, _TESTS_DIR]:
+        os.makedirs(tests_dir, exist_ok=True)
+        for d in [_PAGES_DIR, _TESTS_DIR, tests_dir]:
             init = os.path.join(d, "__init__.py")
             if not os.path.exists(init):
                 open(init, "w").close()

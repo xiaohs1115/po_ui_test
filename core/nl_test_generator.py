@@ -130,7 +130,8 @@ class TestCase:
     url: str
     nl_description: str
     script_name: str = ""   # 生成文件名；空时默认等于 name；同 script_name 的 case 合并到一个文件
-    owner: str = ""         # 负责人/团队，留空时默认等于 script_name
+    project: str = ""       # 所属项目/团队，决定 tests/{project}/ 子目录；留空放 tests/ 根目录
+    owner: str = ""         # 负责人，留空时默认等于 script_name
     steps: list[TestStep] = field(default_factory=list)
 
     def __post_init__(self):
@@ -801,8 +802,10 @@ def generate_test_file(cases: list[TestCase]) -> str:
         owner = case.owner or case.script_name
         steps = case.steps
 
+        project = _safe_name(case.project) if case.project else _safe_name(case.script_name)
         lines += [
             "",
+            f'@pytest.mark.project("{project}")',
             f'@pytest.mark.module("{_safe_name(case.script_name)}")',
             f'@pytest.mark.owner("{owner}")',
             f"def test_{fn}(request):",

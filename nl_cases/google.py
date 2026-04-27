@@ -4,6 +4,8 @@ CASES = [
     TestCase(
         script_name="google",
         name="google_search",
+        project="merchant_growth",  # → tests / merchant_growth / test_tc_wa.py
+        owner = "xiaohs",
         url="https://www.google.com/",
         nl_description="""
         打开页面，等待2s，输入框中输入google，

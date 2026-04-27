@@ -23,7 +23,7 @@ class GooglePage(BasePage):
         """在搜索框输入关键词"""
         self.fill(
             "搜索输入框", "google",
-            hint_css="input[name='q']", hint_xpath="//input[@name='q']",
+            hint_css="combobox[name='q']", hint_xpath="//combobox[@name='q']",
         )
 
     def press_key_step4(self) -> None:
