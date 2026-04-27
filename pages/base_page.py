@@ -3,6 +3,7 @@ BasePage: AI 自愈基类，所有 Page Object 继承此类。
 提供元素定位、页面操作、断言等通用能力。
 """
 import json
+import os
 import re
 from urllib.parse import unquote
 
@@ -24,16 +25,26 @@ _MODAL_CLOSE_CSS = (
 class BasePage:
     """AI 自愈基类：封装元素定位与常用断言。所有 Page Object 继承此类。"""
 
-    _API_KEY: str = ""
-    _BASE_URL: str = ""
-
     def __init__(self, page: Page) -> None:
         self._page = page
-        self._client = OpenAI(api_key=self._API_KEY, base_url=self._BASE_URL)
+        from core.ai_config import require_api_key, base_url
+        self._client = OpenAI(api_key=require_api_key(), base_url=base_url())
 
-    # ── HTML 提取 ───────────────────────────────────────────────────────
+    # ── 页面上下文提取 ──────────────────────────────────────────────────
 
     def _html(self) -> str:
+        """
+        优先返回可访问性快照（语义更丰富），回退到精简 HTML。
+        可访问性快照包含 role / name / aria-label 等信息，
+        比原始 HTML 更适合让 AI 定位交互元素。
+        """
+        try:
+            snap = self._page.accessibility.snapshot()
+            if snap:
+                return json.dumps(snap, ensure_ascii=False)[:10000]
+        except Exception:
+            pass
+
         soup = BeautifulSoup(self._page.content(), "html.parser")
         for tag in soup(["script", "style", "svg", "noscript", "meta", "link", "textarea"]):
             tag.decompose()
@@ -68,13 +79,22 @@ class BasePage:
 
         text_sels: list[str] = []
         for w in re.findall(
-            r'["“”‘’「」](.*?)["“”‘’「」]',
+            '[\u201c\u201d\u2018\u2019\u300c\u300d](.*?)[\u201c\u201d\u2018\u2019\u300c\u300d]',
             description,
         ):
-            text_sels += [f'button:has-text("{w}")', f'input[value*="{w}"]', f'a:has-text("{w}")']
+            text_sels += [
+                f'text="{w}"', f'text={w}',
+                f'button:has-text("{w}")', f'a:has-text("{w}")',
+                f'li:has-text("{w}")', f'span:has-text("{w}")',
+                f'div:has-text("{w}")', f'input[value*="{w}"]',
+            ]
         for w in re.findall(r"[一-鿿]{2,6}", description):
             if w not in {"按钮", "链接", "输入框", "元素", "提交", "搜索框", "首页"}:
-                text_sels += [f'button:has-text("{w}")', f'input[value*="{w}"]']
+                text_sels += [
+                    f'text="{w}"', f'text={w}',
+                    f'button:has-text("{w}")', f'a:has-text("{w}")',
+                    f'li:has-text("{w}")', f'span:has-text("{w}")',
+                ]
 
         candidates = [s for s in [hint_css, hint_xpath] if s] + type_fallbacks + text_sels
 
@@ -133,12 +153,23 @@ class BasePage:
               hint_css: str = "", hint_xpath: str = "") -> None:
         el = self.find(description, hint_css, hint_xpath)
         url_before = self._page.url
-        el.click()
         try:
-            self._page.wait_for_url(lambda u: u != url_before, timeout=4000)
-            self._page.wait_for_load_state("networkidle")
+            # expect_page 在点击前挂监听器，可靠捕获新标签页
+            with self._page.context.expect_page(timeout=3000) as new_page_info:
+                el.click()
+            new_page = new_page_info.value
+            new_page.wait_for_load_state("networkidle")
+            self._page = new_page
         except Exception:
-            self._page.wait_for_timeout(2000)
+            # 无新标签页 → 等待当前页 URL 变化
+            try:
+                self._page.wait_for_url(lambda u: u != url_before, timeout=4000)
+                self._page.wait_for_load_state("networkidle")
+            except Exception:
+                self._page.wait_for_timeout(2000)
+
+    def press_key(self, key: str) -> None:
+        self._page.keyboard.press(key)
 
     def wait(self, seconds: float) -> None:
         self._page.wait_for_timeout(int(seconds * 1000))

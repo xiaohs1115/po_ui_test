@@ -6,4 +6,4 @@ from runner.run_single_cases_util import load_all_cases, run_cases
 
 if __name__ == "__main__":
     # 执行全部
-    run_cases(load_all_cases())
+    run_cases(load_all_cases(), cleanup_orphans=True)

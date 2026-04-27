@@ -30,22 +30,28 @@ jobs:
           python-version: '3.11'
           cache: pip
 
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
           playwright install chromium
           playwright install-deps chromium
+          npx @playwright/mcp@latest --version
 
       - name: Generate test scripts from NL cases
         env:
           CI: true
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
         run: python runner/run_all.py
 
       - name: Run generated tests
         env:
           CI: true
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
         run: |
           pytest tests/ -v --tb=short \
             --html=report/report.html --self-contained-html \

@@ -47,9 +47,15 @@ _CLICK_FALLBACKS = [
     'button[class*="search"]',
 ]
 
-_DEEPSEEK_API_KEY = os.environ["DEEPSEEK_API_KEY"]
-_DEEPSEEK_BASE_URL = "https://api.deepseek.com"
-client = OpenAI(api_key=_DEEPSEEK_API_KEY, base_url=_DEEPSEEK_BASE_URL)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+from core.ai_config import require_api_key, base_url as _ai_base_url, model as _ai_model
+
+client = OpenAI(api_key=require_api_key(), base_url=_ai_base_url())
 
 # 提取描述关键词时过滤掉的元词
 _STOP_WORDS = {'按钮', '链接', '元素', '输入框', '输入', '文本框', '选择框', '区域',
@@ -87,9 +93,14 @@ def _text_fallbacks_from_description(description: str) -> list[str]:
     selectors: list[str] = []
     for text in dict.fromkeys(candidates):   # 去重保序
         selectors += [
+            f'text="{text}"',                  # Playwright 原生文本定位（精确匹配）
+            f'text={text}',                    # Playwright 原生文本定位（部分匹配）
             f'button:has-text("{text}")',
-            f'input[value*="{text}"]',
             f'a:has-text("{text}")',
+            f'li:has-text("{text}")',
+            f'span:has-text("{text}")',
+            f'div:has-text("{text}")',
+            f'input[value*="{text}"]',
             f'[aria-label*="{text}"]',
         ]
     return selectors
@@ -144,6 +155,7 @@ def _method_name(step: TestStep, namespace: str = "") -> str:
         'assert_text': 'assert_text', 'assert_visible': 'check_visible',
         'assert_url': 'assert_url', 'wait': 'wait',
         'assert_count': 'assert_count', 'assert_each_text': 'assert_each_text',
+        'press_key': 'press_key', 'close_modal': 'close_modal',
     }.get(step.action, step.action)
     base = f"{prefix}_step{step.step_id}"
     return f"{namespace}_{base}" if namespace else base
@@ -245,12 +257,25 @@ def parse_nl_to_steps(test_case: TestCase) -> list[TestStep]:
       "description": "校验每条结果标题均包含指定文字",
       "element_description": "要遍历的每个元素描述（如每条搜索结果的标题）",
       "value": "每个元素中应包含的文字"
+    }},
+    {{
+      "step_id": 10,
+      "action": "press_key",
+      "description": "按下键盘 Enter 键提交搜索",
+      "value": "Enter"
+    }},
+    {{
+      "step_id": 11,
+      "action": "close_modal",
+      "description": "如果有弹窗则关闭，没有则忽略"
     }}
   ]
 }}
 
-action 只能是这 9 种：navigate / fill / click / assert_text / assert_visible / assert_url / wait / assert_count / assert_each_text
+action 只能是这 11 种：navigate / fill / click / assert_text / assert_visible / assert_url / wait / assert_count / assert_each_text / press_key / close_modal
 第一个步骤通常是 navigate。
+press_key 专门用于键盘按键操作（如 Enter、Tab、Escape），value 填键名；不要用 click 代替键盘操作。
+close_modal 专门用于"如果有弹窗则关闭，没有则忽略"这类条件性关闭弹窗操作，不需要 element_description；禁止用 click 代替此操作。
 
 重要约束：
 1. element_description 必须描述用户**看到的视觉特征**（按钮上的文字、输入框的占位符、标签文字等），
@@ -260,7 +285,7 @@ action 只能是这 9 种：navigate / fill / click / assert_text / assert_visib
 3. assert_url 的 value 填 URL 中必然出现的字符串片段（如 wd 参数值、路径等）。"""
 
     response = client.chat.completions.create(
-        model="deepseek-chat",
+        model=_ai_model(),
         messages=[{"role": "user", "content": prompt}],
         response_format={"type": "json_object"},
         stream=False
@@ -316,7 +341,7 @@ HTML：
 {{"css": "CSS选择器", "xpath": "XPath"}}"""
 
     response = client.chat.completions.create(
-        model="deepseek-chat",
+        model=_ai_model(),
         messages=[{"role": "user", "content": prompt}],
         response_format={"type": "json_object"},
         stream=False
@@ -325,36 +350,63 @@ HTML：
     return data.get("css", ""), data.get("xpath", "")
 
 
+def _verify_selectors(page: Page, css: str, xpath: str) -> bool:
+    for sel in filter(None, [css, xpath]):
+        try:
+            if page.locator(sel).first.is_visible():
+                return True
+        except Exception:
+            pass
+    return False
+
+
 def resolve_elements(page: Page, steps: list[TestStep]) -> list[TestStep]:
     """
-    对所有需要定位元素的步骤，调用 AI 补充 css/xpath，
-    并验证选择器在页面上是否真实存在，不存在时标注警告。
+    Phase 2：定位页面元素，补充 css/xpath。
+
+    优先使用 Playwright MCP Server（可访问性快照，语义更准确）；
+    MCP 不可用或定位失败时自动回退到原有 HTML 提取模式。
     """
+    need = [(i, s) for i, s in enumerate(steps) if s.element_description]
+    if not need:
+        return steps
+
+    current_url = page.url
+
+    # ── 尝试 MCP 定位 ────────────────────────────────────────────
+    mcp_results: list[tuple[str, str]] = []
+    try:
+        from core.mcp_locator import locate_elements_batch
+        print("  🔌 Playwright MCP Server 定位中...")
+        descs = [s.element_description for _, s in need]
+        mcp_results = locate_elements_batch(current_url, descs)
+    except ImportError:
+        print("  ℹ️  mcp 未安装，使用 HTML 模式（pip install mcp 可启用 MCP）")
+
+    # ── 逐步处理结果 ─────────────────────────────────────────────
     html_cache: dict[str, str] = {}
 
-    for step in steps:
-        if not step.element_description:
-            continue
+    for idx, (_, step) in enumerate(need):
+        css, xpath = ("", "")
+        mode = "HTML"
 
-        current_url = page.url
-        if current_url not in html_cache:
-            html_cache[current_url] = extract_html(page)
+        if mcp_results and idx < len(mcp_results):
+            mcp_css, mcp_xpath = mcp_results[idx]
+            if mcp_css or mcp_xpath:
+                css, xpath = mcp_css, mcp_xpath
+                mode = "MCP"
 
-        css, xpath = ai_find_element(html_cache[current_url], step.element_description)
-
-        # 验证 AI 生成的选择器是否在页面上可见（count>0 只代表存在 DOM，可能是隐藏元素）
-        verified = False
-        for sel in filter(None, [css, xpath]):
-            try:
-                if page.locator(sel).first.is_visible():
-                    verified = True
-                    break
-            except Exception:
-                pass
+        # MCP 未返回结果时回退到 HTML 模式
+        if not css and not xpath:
+            if current_url not in html_cache:
+                html_cache[current_url] = extract_html(page)
+            css, xpath = ai_find_element(html_cache[current_url], step.element_description)
+            mode = "HTML"
 
         step.css = css
         step.xpath = xpath
-        status = "✅" if verified else "⚠️ 页面未找到，执行时将走降级链"
+        verified = _verify_selectors(page, css, xpath)
+        status = f"✅ ({mode})" if verified else f"⚠️  ({mode}) 页面未验证，执行时走降级链"
         print(f"  Step {step.step_id} [{step.description}]  {status}")
         print(f"    CSS:   {css}")
         print(f"    XPath: {xpath}")
@@ -434,13 +486,19 @@ def execute_steps(page: Page, steps: list[TestStep]) -> list[TestStep]:
                 if el is None:
                     raise Exception(f"按钮未找到（描述: {step.element_description}）—— 页面结构可能已变更")
                 url_before = page.url
-                el.click()
-                print(f"    → 已点击")
                 try:
-                    page.wait_for_url(lambda url: url != url_before, timeout=4000)
+                    with page.context.expect_page(timeout=3000) as new_page_info:
+                        el.click()
+                    page = new_page_info.value
                     page.wait_for_load_state('networkidle')
+                    print(f"    → 已点击（新标签页）")
                 except Exception:
-                    page.wait_for_timeout(2000)
+                    print(f"    → 已点击")
+                    try:
+                        page.wait_for_url(lambda url: url != url_before, timeout=4000)
+                        page.wait_for_load_state('networkidle')
+                    except Exception:
+                        page.wait_for_timeout(2000)
                 step.result = "pass"
 
             elif step.action == "assert_text":
@@ -474,6 +532,36 @@ def execute_steps(page: Page, steps: list[TestStep]) -> list[TestStep]:
                     print(f"    → ✅ URL 包含: '{step.value}'")
                 else:
                     raise Exception(f"期望 URL 包含 '{step.value}'，实际(解码后): {unquote(page.url)}")
+
+            elif step.action == "close_modal":
+                _modal_css = (
+                    ".ant-modal-wrap, [class*='ant-modal'][class*='open'], "
+                    "[class*='Modal'][class*='visible'], [class*='modal'][class*='show']"
+                )
+                _close_css = (
+                    ".ant-modal-close, .ant-modal-close-x, "
+                    "button[class*='close'], [class*='modal'] [class*='close-btn'], "
+                    "[class*='Modal'] [class*='close']"
+                )
+                try:
+                    page.locator(_modal_css).first.wait_for(state="visible", timeout=4000)
+                    page.locator(_close_css).first.click(timeout=4000)
+                    page.wait_for_load_state("networkidle")
+                    step.result = "pass"
+                    print(f"    → 弹窗已关闭")
+                except Exception:
+                    step.result = "pass"
+                    print(f"    → 无弹窗，跳过")
+
+            elif step.action == "press_key":
+                key = step.value or "Enter"
+                page.keyboard.press(key)
+                step.result = "pass"
+                print(f"    → ⌨️  已按键: '{key}'")
+                try:
+                    page.wait_for_load_state("networkidle", timeout=5000)
+                except Exception:
+                    pass
 
             elif step.action == "wait":
                 seconds = float(step.value or "1")
@@ -560,6 +648,20 @@ def _emit_page_methods(lines: list[str], case: TestCase, namespace: str) -> None
                 f"        self.navigate(self.URL)",
                 "",
             ]
+        elif step.action == "close_modal":
+            lines += [
+                f"    def {method}(self) -> None:",
+                f'        """{desc}"""',
+                f"        self.close_modal_if_present()",
+                "",
+            ]
+        elif step.action == "press_key":
+            lines += [
+                f"    def {method}(self) -> None:",
+                f'        """{desc}"""',
+                f'        self.press_key("{val or "Enter"}")',
+                "",
+            ]
         elif step.action == "wait":
             lines += [
                 f"    def {method}(self) -> None:",
@@ -641,12 +743,15 @@ def generate_page_class(cases: list[TestCase]) -> str:
     lines: list[str] = [
         f'"""Page Object: {first.script_name}  ({len(cases)} case(s))"""',
         "import os",
+        "try:",
+        "    from dotenv import load_dotenv",
+        "    load_dotenv()",
+        "except ImportError:",
+        "    pass",
         "from .base_page import BasePage",
         "",
         "",
         f"class {cls}(BasePage):",
-        '    _API_KEY = os.environ["DEEPSEEK_API_KEY"]',
-        f'    _BASE_URL = "{base_url}"',
         f'    URL = "{first.url}"',
         "",
     ]
@@ -670,6 +775,11 @@ def generate_test_file(cases: list[TestCase]) -> str:
     lines: list[str] = [
         "import os, sys",
         "sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))",
+        "try:",
+        "    from dotenv import load_dotenv",
+        "    load_dotenv()",
+        "except ImportError:",
+        "    pass",
         "",
         "from playwright.sync_api import sync_playwright",
         f"from pages.{script_safe}_page import {cls}",
@@ -801,7 +911,7 @@ def _ai_find(page: Page, description: str, hint_css: str = "", hint_xpath: str =
     # 所有候选均失败 → 调 AI 重新生成
     print(f"  ♻️  自愈: 重新定位 {{description!r}}")
     resp = _client.chat.completions.create(
-        model="deepseek-chat",
+        model=_ai_model(),
         messages=[{{"role":"user","content":
             f"根据 HTML 为以下元素生成 CSS 选择器（JSON: {{{{\\\"css\\\": \\\"...\\\"}}}}):\\n元素: {{description}}\\n\\nHTML:\\n{{_html(page)}}"
         }}],
