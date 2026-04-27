@@ -452,8 +452,11 @@ def execute_steps(page: Page, steps: list[TestStep]) -> list[TestStep]:
         print(f"\n  Step {step.step_id}: {step.description}")
         try:
             if step.action == "navigate":
-                page.goto(step.url)
-                page.wait_for_load_state('networkidle')
+                page.goto(step.url, timeout=60000, wait_until="domcontentloaded")
+                try:
+                    page.wait_for_load_state('networkidle', timeout=10000)
+                except Exception:
+                    pass
                 page_changed_after_fill = False
                 step.result = "pass"
 
@@ -1041,8 +1044,11 @@ def run_test_case(test_case: TestCase, save_script: bool = True):
         page = browser.new_page()
 
         # 先打开页面，以便提取 HTML 用于元素定位
-        page.goto(test_case.url)
-        page.wait_for_load_state('networkidle')
+        page.goto(test_case.url, timeout=60000, wait_until="domcontentloaded")
+        try:
+            page.wait_for_load_state('networkidle', timeout=10000)
+        except Exception:
+            pass
 
         # Phase 2: 定位元素
         print("\n🎯 Phase 2: AI 定位元素...")

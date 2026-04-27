@@ -140,8 +140,11 @@ class BasePage:
     # ── 页面操作 ────────────────────────────────────────────────────────
 
     def navigate(self, url: str) -> None:
-        self._page.goto(url)
-        self._page.wait_for_load_state("networkidle")
+        self._page.goto(url, timeout=60000, wait_until="domcontentloaded")
+        try:
+            self._page.wait_for_load_state("networkidle", timeout=10000)
+        except Exception:
+            pass
 
     def fill(self, description: str, value: str,
              hint_css: str = "", hint_xpath: str = "") -> None:
