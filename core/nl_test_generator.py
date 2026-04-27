@@ -130,11 +130,14 @@ class TestCase:
     url: str
     nl_description: str
     script_name: str = ""   # 生成文件名；空时默认等于 name；同 script_name 的 case 合并到一个文件
+    owner: str = ""         # 负责人/团队，留空时默认等于 script_name
     steps: list[TestStep] = field(default_factory=list)
 
     def __post_init__(self):
         if not self.script_name:
             self.script_name = self.name
+        if not self.owner:
+            self.owner = self.script_name
 
 
 # ── PO 命名辅助 ───────────────────────────────────────────────────────
@@ -786,6 +789,7 @@ def generate_test_file(cases: list[TestCase]) -> str:
         "except ImportError:",
         "    pass",
         "",
+        "import pytest",
         "from playwright.sync_api import sync_playwright",
         f"from pages.{script_safe}_page import {cls}",
         "",
@@ -794,16 +798,20 @@ def generate_test_file(cases: list[TestCase]) -> str:
     for case in cases:
         ns = _safe_name(case.name) if multi else ""
         fn = _safe_name(case.name)
+        owner = case.owner or case.script_name
         steps = case.steps
 
         lines += [
             "",
-            f"def test_{fn}():",
+            f'@pytest.mark.module("{_safe_name(case.script_name)}")',
+            f'@pytest.mark.owner("{owner}")',
+            f"def test_{fn}(request):",
             f'    """{case.nl_description.strip()}\n    """',
             "    with sync_playwright() as p:",
             '        browser = p.chromium.launch(headless="CI" in os.environ)',
-            f"        po = {cls}(browser.new_page())",
-            "",
+            "        _pw_page = browser.new_page()",
+            f"        po = {cls}(_pw_page)",
+            "        try:",
         ]
 
         i = 0
@@ -816,19 +824,36 @@ def generate_test_file(cases: list[TestCase]) -> str:
                 next_method = _method_name(steps[i + 1], ns)
                 var = f"_visible_{step.step_id}"
                 lines += [
-                    f"        {var} = po.{method}()",
-                    f"        if {var}:",
-                    f"            po.{next_method}()",
-                    "",
+                    f"            {var} = po.{method}()",
+                    f"            if {var}:",
+                    f"                po.{next_method}()",
                 ]
                 i += 2
             else:
-                lines.append(f"        po.{method}()")
+                lines.append(f"            po.{method}()")
                 i += 1
 
-        lines += ["", "        browser.close()"]
+        lines += [
+            "        except Exception:",
+            "            _scr_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'report', 'screenshots')",
+            "            os.makedirs(_scr_dir, exist_ok=True)",
+            "            _safe_id = request.node.nodeid.replace('/', '_').replace('::', '_').replace('.py', '')",
+            "            _scr_path = os.path.join(_scr_dir, f'{_safe_id}.png')",
+            "            try:",
+            "                po._page.screenshot(path=_scr_path, full_page=True)",
+            "                try:",
+            "                    from pytest_html import extras as _ext",
+            "                    request.node.extra = getattr(request.node, 'extra', []) + [_ext.image(_scr_path)]",
+            "                except Exception:",
+            "                    pass",
+            "            except Exception:",
+            "                pass",
+            "            raise",
+            "        finally:",
+            "            browser.close()",
+        ]
 
-    lines += ["", "", 'if __name__ == "__main__":', f"    test_{_safe_name(cases[0].name)}()"]
+    lines += ["", "", 'if __name__ == "__main__":', f"    test_{_safe_name(cases[0].name)}(None)"]
     return "\n".join(lines)
 
 
